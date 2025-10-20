@@ -32,6 +32,7 @@ def masked_mse_loss(pred, target):
     # 创建 mask，非零点为 True
     mask = (target != 0).float()
     
+    
     # 只计算非零点的误差
     loss = (mask * (pred - target) ** 2).sum() / mask.sum().clamp(min=1.0)  # 避免除0
     
