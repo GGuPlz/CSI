@@ -2,9 +2,15 @@ import warnings
 
 
 class DefaultConfig(object):
-    data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI_data'
-    train_data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI_data/train'
-    test_data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI_data/test'
+    ##path for z509 linux
+    data = '/media/public/z509/g23/wyt/YOLOV11/1data_create/dataset/main_small'
+    train_data = '/media/public/z509/g23/wyt/YOLOV11/1data_create/dataset/main_small/train'
+    test_data = '/media/public/z509/g23/wyt/YOLOV11/1data_create/dataset/main_small/test'
+    ##path for gyt pc windows
+    # data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI_data'
+    # train_data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI_data/train'
+    # test_data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI_data/test'
+    
     #load_model_path='/media/public/z509/g23/wyt/YOLOV11/2WIFI-2D/run/20250426/main_small/结果/best.pth'
     #load_model_path='/media/public/z509/g24/gyt/CSI/run/0928/best.pth'
     load_model_path = None
