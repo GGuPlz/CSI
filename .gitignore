@@ -1,3 +1,4 @@
 CSI_data/
 run/
 __pychache__/
+*.pyc
