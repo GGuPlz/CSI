@@ -18,8 +18,10 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.utils.data import DataLoader,TensorDataset
+from scipy.optimize import linear_sum_assignment
 
 
 from config import opt
@@ -58,6 +60,98 @@ class Visualizer(object):
                       update=None if x == 0 else 'append',
                       **kwargs)
         self.index[name] = x + 1
+
+
+class HungarianMatcher(nn.Module):
+    def __init__(self, cost_class=1, cost_keypoints=5):
+        super().__init__()
+        self.cost_class = cost_class
+        self.cost_keypoints = cost_keypoints
+
+    @torch.no_grad()
+    def forward(self, outputs, targets):
+        """
+        outputs:
+            pred_logits: [B, num_queries, num_classes+1]
+            pred_keypoints: [B, num_queries, K, 2]
+        targets:
+            list of dict, each has:
+                'labels': [num_gt]
+                'keypoints': [num_gt, K, 2]
+        """
+        bs, num_queries = outputs['pred_logits'].shape[:2]
+        out_prob = outputs['pred_logits'].softmax(-1)  # [B, num_queries, C]
+        out_kpts = outputs['pred_keypoints']
+
+        indices = []
+        for b in range(bs):
+            tgt_ids = targets[b]['labels']              # [num_gt]
+            tgt_kpts = targets[b]['keypoints']          # [num_gt, K, 2]
+
+            # 分类代价（负 log 概率）
+            cost_class = -out_prob[b][:, tgt_ids]       # [num_queries, num_gt]
+
+            # 关键点 L1 代价
+            cost_kpt = torch.cdist(out_kpts[b].flatten(1), tgt_kpts.flatten(1), p=1)
+
+            # 组合总代价
+            C = self.cost_class * cost_class + self.cost_keypoints * cost_kpt
+            C = C.cpu()
+
+            pred_ind, tgt_ind = linear_sum_assignment(C)
+            indices.append((torch.as_tensor(pred_ind, dtype=torch.int64),
+                            torch.as_tensor(tgt_ind, dtype=torch.int64)))
+        return indices
+
+class SetCriterion(nn.Module):
+    def __init__(self, num_classes, matcher, weight_dict=None, eos_coef=0.1):
+        super().__init__()
+        self.num_classes = num_classes
+        self.matcher = matcher
+        self.weight_dict = weight_dict or {'loss_ce': 1, 'loss_kpt': 5}
+        self.eos_coef = eos_coef
+
+        # 背景类别权重
+        empty_weight = torch.ones(self.num_classes + 1).cuda()
+        empty_weight[-1] = self.eos_coef
+        self.register_buffer('empty_weight', empty_weight)
+
+    def loss_labels(self, outputs, targets, indices):
+        """分类损失 (CrossEntropy)，含 no-object"""
+        src_logits = outputs['pred_logits']  # [B, Q, C+1]
+
+        idx = self._get_src_permutation_idx(indices)
+        target_classes_o = torch.cat([t['labels'][J] for t, (_, J) in zip(targets, indices)])
+        target_classes = torch.full(src_logits.shape[:2], self.num_classes,
+                                    dtype=torch.int64, device=src_logits.device)
+        target_classes[idx] = target_classes_o
+
+        loss_ce = F.cross_entropy(src_logits.transpose(1, 2), target_classes, weight=self.empty_weight)
+        return {'loss_ce': loss_ce}
+
+    def loss_keypoints(self, outputs, targets, indices):
+        """关键点 L1 损失"""
+        idx = self._get_src_permutation_idx(indices)
+        src_kpts = outputs['pred_keypoints'][idx]           # [num_match, K, 2]
+        target_kpts = torch.cat([t['keypoints'][J] for t, (_, J) in zip(targets, indices)], dim=0)
+        loss_kpt = F.l1_loss(src_kpts, target_kpts, reduction='none').mean()
+        return {'loss_kpt': loss_kpt}
+
+    def _get_src_permutation_idx(self, indices):
+        batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
+        src_idx = torch.cat([src for (src, _) in indices])
+        return batch_idx, src_idx
+
+    def forward(self, outputs, targets):
+        indices = self.matcher(outputs, targets)
+        losses = {}
+        losses.update(self.loss_labels(outputs, targets, indices))
+        losses.update(self.loss_keypoints(outputs, targets, indices))
+
+        # 组合总损失
+        total_loss = sum(losses[k] * self.weight_dict[k] for k in losses.keys())
+        losses['total_loss'] = total_loss
+        return losses
 
 '''计算mIOU'''
 def calculate_batch_iou(pred_boxes, true_boxes):
@@ -176,54 +270,62 @@ def train(epoch,model,train_dataloader,criterion,optimizer,visualizer):
         csi_phase = data['csi_phase'].float().cuda(non_blocking=True) #torch.Size([32, 5, 3, 3, 30])
         keypoint  = data['keypoint'].float().cuda(non_blocking=True)  #torch.Size([32, 51, 2])
         box       = data['box'].float().cuda(non_blocking=True)       #torch.Size([32, 6, 2])
+      
         #得到输入网络里的csi
         # B, T1, C1, C2, T2 = csi_abs.shape  # B=32, T1=5, C1=3, C2=3, T2=30
-        # csi_abs = csi_abs.view(B, T1 * T2, C1, C2)  # [32, 150, 3, 3]
+        
+        targets = []
+        for idx in range(len(data['n_keypoint'])):
+            targets.append({
+                'labels': data['label'][idx].cuda(non_blocking=True),
+                'keypoints': data['n_keypoint'][idx].cuda(non_blocking=True)
+            })
+        
         csi_abs = csi_abs.permute(0, 2, 1, 3, 4).contiguous().view(csi_abs.shape[0], 3, 15, 30)
         csi_phase = csi_phase.permute(0, 2, 1, 3, 4).contiguous().view(csi_abs.shape[0], 3, 15, 30)
         csi = torch.cat([csi_abs, csi_phase], dim=2)  #torch.Size([32, 3, 30, 30])
-        # csi = csi_abs
-        # mask = torch.ones(csi.size(0), csi.size(2), csi.size(3), dtype=torch.bool).to(csi.device)
-        keypoint = keypoint.view(32, 3, 17, 2)
+
         #print(keypoint[0])
-        output = model(csi, keypoint)
+        pred_keypoint, pred_classes = model(csi, targets)
         #print(output[0])
         #loss
-        keypoint_loss = criterion(output, keypoint)  # 计算关键点的回归损失
+        keypoint = keypoint.view(32, 3, 17, 2)
+        keypoint_loss = criterion(pred_keypoint, keypoint)  # 计算关键点的回归损失
+        #class_loss = nn.CrossEntropyLoss()(pred_classes.view(-1, 2), data['label'].view(-1).long().cuda(non_blocking=True))  # 计算分类损失
+        
+        outputs = {
+            'pred_logits': pred_classes.cuda(non_blocking=True),
+            'pred_keypoints': pred_keypoint.cuda(non_blocking=True)
+        }
+        
+        matcher = HungarianMatcher(cost_class=1, cost_keypoints=5)
+        new_criterion = SetCriterion(num_classes=1, matcher=matcher)
+        loss_dict = new_criterion(outputs, targets)
         
         
-        #print(keypoint_loss)
-        #exit()
-        #box_loss = criterion(pre_box, box)
         #loss =  0.1 * box_loss + keypoint_loss
-        loss =  keypoint_loss
+        #loss =  keypoint_loss 
 
         #mIOU
         #avg_iou = calculate_batch_iou(pre_box.cpu(), box.cpu())
           
         #Pck@0.1-Pck@0.9
-        pck_list=calculate_pck_range(output, keypoint)  #[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0038510911424903724]
+        pck_list=calculate_pck_range(pred_keypoint, keypoint)  #[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0038510911424903724]
 
         optimizer.zero_grad()
-        loss.backward()
-        
-        
-        # for name, p in model.named_parameters():
-        #     if p.grad is None:
-        #         continue
-        #     print(name, p.grad.shape, p.grad.abs().mean().item())
-        # exit()
+        #loss.backward()
+        loss_dict['total_loss'].backward()
         
         optimizer.step()
          # 每 50 步打印一次
         if (i + 1) % 50 == 0 or (i + 1) == len(train_dataloader):
             print(f"Epoch [{epoch+1}/{opt.max_epoch}], Step [{i+1}/{len(train_dataloader)}], "
-                  f"Loss: {loss.item():.4f}, Keypoint Loss: {keypoint_loss.item():.4f}"
+                  f"Loss: {loss_dict['total_loss'].item():.4f}, Keypoint Loss: {keypoint_loss.item():.4f}"
                   #f" mIoU: {avg_iou:.4f}"
                   )
             
-            visualizer.plot('train_loss', loss.item())
-            visualizer.plot('train_keypoint_loss', keypoint_loss.item())
+            visualizer.plot('train_loss', loss_dict['total_loss'].item())
+            visualizer.plot('train_keypoint_loss', loss_dict['total_loss'].item())
             #visualizer.plot('train_box_loss', box_loss.item())
             #visualizer.plot('train_mIoU', avg_iou.detach().cpu().numpy())
             
@@ -267,19 +369,21 @@ def test(epoch,model, test_dataloader, criterion,visualizer,best_PCK,save_path):
 
             # CSI 预处理
             # B, T1, C1, C2, T2 = csi_abs.shape  # B=32, T1=5, C1=3, C2=3, T2=30
-            # csi_abs = csi_abs.view(B, T1 * T2, C1, C2)  # [32, 150, 3, 3]
+            
             csi_abs = csi_abs.permute(0, 2, 1, 3, 4).contiguous().view(csi_abs.shape[0], 3, 15, 30)
             csi_phase = csi_phase.permute(0, 2, 1, 3, 4).contiguous().view(csi_abs.shape[0], 3, 15, 30)
             csi = torch.cat([csi_abs, csi_phase], dim=2)  # [B, 3, 30, 30]
-            # csi=csi_abs 
-            # mask = torch.ones(csi.size(0), csi.size(2), csi.size(3), dtype=torch.bool).to(csi.device)
+            
+            targets = []
+            for idx in range(len(data['keypoint'])):
+                targets.append({
+                    'labels': data['label'][idx].cuda(non_blocking=True),
+                    'keypoints': data['n_keypoint'][idx].cuda(non_blocking=True)
+                })
             
             keypoint = keypoint.view(32, 3, 17, 2)
-            r_keypoint = torch.zeros_like(keypoint)
-            
-            r_keypoint[..., 0] = keypoint[... ,0] / 86.0
-            r_keypoint[..., 1] = keypoint[... ,1] / 42.0
-            output = model(csi, None)
+
+            output, output_classes = model(csi, None)
             # output = model(csi_abs,csi_phase)
             # output[..., 0] = output[... ,0] * 86.0
             # output[..., 1] = output[... ,1] * 42.0
@@ -364,7 +468,6 @@ def test(epoch,model, test_dataloader, criterion,visualizer,best_PCK,save_path):
 
     return best_PCK
 
-    
    
 def main(**kwargs):
     print('start,开始执行代码')

@@ -3,14 +3,15 @@ import warnings
 
 class DefaultConfig(object):
     ##path for z509 linux
-    data = '/media/public/z509/g23/wyt/YOLOV11/1data_create/dataset/main_small'
-    train_data = '/media/public/z509/g23/wyt/YOLOV11/1data_create/dataset/main_small/train'
-    test_data = '/media/public/z509/g23/wyt/YOLOV11/1data_create/dataset/main_small/test'
-    ##path for gyt pc windows
-    # data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI_data'
-    # train_data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI_data/train'
-    # test_data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI_data/test'
+    # data = '/media/public/z509/g23/wyt/YOLOV11/1data_create/dataset/main_small'
+    # train_data = '/media/public/z509/g23/wyt/YOLOV11/1data_create/dataset/main_small/train'
+    # test_data = '/media/public/z509/g23/wyt/YOLOV11/1data_create/dataset/main_small/test'
     
+    ##path for gyt pc windows
+    data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI/CSI_data'
+    train_data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI/CSI_data/train'
+    test_data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI/CSI_data/test'
+
     #load_model_path='/media/public/z509/g23/wyt/YOLOV11/2WIFI-2D/run/20250426/main_small/结果/best.pth'
     #load_model_path='/media/public/z509/g24/gyt/CSI/run/0928/best.pth'
     load_model_path = None
@@ -22,9 +23,9 @@ class DefaultConfig(object):
     print_freq = 20   #指定训练过程中每隔多少个批次打印一次训练信息
 
     debug_file = 'tmp/debug'    #没用到
-    save_path = 'C:/Users/gyt/OneDrive/Desktop/code/run/1004/'  #模型保存路径
-    result_file = 'C:/Users/gyt/OneDrive/Desktop/code/run/1004/main_small/结果/results.csv' 
-    resultvideo_file = 'C:/Users/gyt/OneDrive/Desktop/code/run/1004/main_small/结果'
+    save_path = 'C:/Users/gyt/OneDrive/Desktop/code/CSI/run/1004/'  #模型保存路径
+    result_file = 'C:/Users/gyt/OneDrive/Desktop/code/CSI/run/1004/main_small/结果/results.csv' 
+    resultvideo_file = 'C:/Users/gyt/OneDrive/Desktop/code/CSI/run/1004/main_small/结果'
 
     max_epoch = 250   #训练的最大轮数
     # lr = 0.00002      #学习率，即每次更新模型参数的步长大小

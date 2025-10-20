@@ -207,6 +207,7 @@ class DenoiseMLP(nn.Module):
         self.blocks = nn.ModuleList([MLPBlock(hidden_dim) for _ in range(n_blocks)])
         self.input_proj = nn.Linear(in_dim, hidden_dim)
         self.output_proj = nn.Linear(hidden_dim, in_dim)
+        self.output_proj_class = nn.Linear(hidden_dim, 2*3)  # Assuming 2 classes for classification
 
     def forward(self, x, t, f):
         t_emb = self.time_mlp(t)
@@ -214,7 +215,9 @@ class DenoiseMLP(nn.Module):
         h = self.input_proj(x)
         for block in self.blocks:
             h = block(h, t_emb, f_emb)
-        return self.output_proj(h)
+        fc_h = h.clone()
+        kp_h = h.clone()
+        return self.output_proj(kp_h), self.output_proj_class(fc_h)
 
 
 
@@ -261,14 +264,12 @@ class csidiffusion(nn.Module):
              nn.Linear(256, 102)
         ) 
         
-        self.code = DenoiseMLP(in_dim=17*2*3, hidden_dim=256, n_blocks=2)
-        
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
         self.num_proposals = 3
         self.num_keypoints = 17
+        self.num_dimension = 2
         
-        
+        self.code = DenoiseMLP(in_dim=self.num_proposals*self.num_keypoints*self.num_dimension, hidden_dim=256, n_blocks=2)
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         # diffusion
         timesteps = 100
         sampling_timesteps = 1
@@ -295,7 +296,7 @@ class csidiffusion(nn.Module):
         self.register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1. - alphas_cumprod))
         self.register_buffer('sqrt_recipm1_alphas_cumprod', torch.sqrt(1. / alphas_cumprod - 1))
         
-    def forward(self, input_csi, input_keypoints):
+    def forward(self, input_csi, input_targets):
         csi = input_csi
         resnet_outputs = self.resnet50(csi)
         channel_mapped_outputs = self.channel_mapper(resnet_outputs)
@@ -306,25 +307,19 @@ class csidiffusion(nn.Module):
         bs = input_csi.shape[0] 
         #combined = combined.view(bs * self.num_proposals, 256, self.embed_dim)     # [320, 256, 22]
         
-
-        # combined = combined.reshape(input_csi.shape[0], -1)
-        # csi = self.decode(combined)
-        # csi = csi.reshape(-1, 3, 17, 2) 
-        # return csi
         if not self.training:
             results = self.ddim_sample(bs, combined)
             return results
         
         if self.training:
-            gt_keypoints = input_keypoints.clone()
-            gt_keypoints /= self.hw  # 归一化到0-1之间
-            x_keypoints, noises, t = self.prepare_targets(gt_keypoints)
+            # gt_keypoints = input_keypoints.clone()
+            x_keypoints, noises, t = self.prepare_targets(input_targets)
             t = t.squeeze(-1)
             x_keypoints *= self.hw  # 还原到原始尺度
-            output = self.code(x_keypoints.view(bs, -1), t, combined)
-            output = output.view(-1, 3, 17, 2)
-            #output = self.head(combined, x_keypoints, t, None)
-            return output
+            pred_keypoints, pred_classes = self.code(x_keypoints.view(bs, -1), t, combined)
+            pred_keypoints = pred_keypoints.view(-1, self.num_proposals, self.num_keypoints, self.num_dimension)
+            pred_classes = pred_classes.view(-1, self.num_proposals, 2)
+            return pred_keypoints, pred_classes
         
     def predict_noise_from_start(self, x_t, t, x0):
         return (
@@ -340,8 +335,8 @@ class csidiffusion(nn.Module):
         x_kpts = x_kpts * self.hw  # 还原到原始尺度
         # 将处理后的关键点送入头部网络进行预测
         #outputs_kpts = self.head(backbone_feats, x_kpts, t, None)
-        outputs_kpts = self.code(x_kpts.view(x_kpts.shape[0], -1), t, backbone_feats)
-        outputs_kpts = outputs_kpts.view(-1, 3, 17, 2)
+        outputs_kpts, outputs_classes = self.code(x_kpts.view(x_kpts.shape[0], -1), t, backbone_feats)
+        outputs_kpts = outputs_kpts.view(-1, self.num_proposals, self.num_keypoints, self.num_dimension)
         # x_start 是去噪后的预测结果（关键点）
         x_start = outputs_kpts  # (B, N, K*2)，表示 K 个关键点的 (x, y)
         x_start= x_kpts / self.hw
@@ -353,12 +348,12 @@ class csidiffusion(nn.Module):
         # 根据扩散目标预测噪声
         pred_noise = self.predict_noise_from_start(x, t, x_start)
 
-        return ModelPrediction(pred_noise, x_start), outputs_kpts
+        return ModelPrediction(pred_noise, x_start), outputs_kpts, outputs_classes
 
     
     def ddim_sample(self, bs,backbone_feats, clip_denoised=True, do_postprocess=True):
         batch = bs
-        shape = (batch, self.num_proposals, self.num_keypoints, 2)
+        shape = (batch, self.num_proposals, self.num_keypoints, self.num_dimension)
         total_timesteps, sampling_timesteps, eta = self.num_timesteps, self.sampling_timesteps, self.ddim_sampling_eta
 
         times = torch.linspace(-1, total_timesteps - 1, steps=sampling_timesteps + 1)
@@ -373,7 +368,7 @@ class csidiffusion(nn.Module):
             time_cond = torch.full((batch,), time, device=self.device, dtype=torch.long)
             self_cond = x_start if self.self_condition else None
 
-            preds, output_kpts = self.model_predictions(backbone_feats, img, time_cond, self_cond, clip_x_start=clip_denoised)
+            preds, output_kpts, output_classes = self.model_predictions(backbone_feats, img, time_cond, self_cond, clip_x_start=clip_denoised)
             pred_noise, x_start = preds.pred_noise, preds.pred_x_start  # [B, N, K, 2]
 
             if self.box_renewal:
@@ -394,7 +389,7 @@ class csidiffusion(nn.Module):
             img = x_start * alpha_next.sqrt() + c * pred_noise + sigma * noise
 
             if self.box_renewal:
-                replenish = torch.randn(batch, self.num_proposals - num_remain, self.num_keypoints, 2, device=img.device)
+                replenish = torch.randn(batch, self.num_proposals - num_remain, self.num_keypoints, self.num_dimension, device=img.device)
                 img = torch.cat([img[:, :num_remain], replenish], dim=1)
 
             if self.use_ensemble and self.sampling_timesteps > 1:
@@ -405,20 +400,20 @@ class csidiffusion(nn.Module):
             kps = all_kps.mean(dim=0)  # [B, N, K, 2]
         else:
             kps = output_kpts  # [B, N, K, 2]
-        return kps
+        return kps, output_classes
        
         
-    def prepare_targets(self, gt_keypoints):
+    def prepare_targets(self, targets):
         diffused_keypoints = []
         noises = []
         ts = []
 
-        for gt_keypoint in gt_keypoints:
-            keypoint = gt_keypoint
-            # CSI 数据下，坐标默认已经归一化，无需 / image_size      
-            keypoint = torch.as_tensor(keypoint, dtype=torch.float32, device=self.device) # 强制转成 tensor，防止是 list
+        for target in targets:
+            gt_keypoint = target['keypoints'].clone()
+            gt_keypoint /= self.hw  # 归一化到0-1之间    
+            gt_keypoint = torch.as_tensor(gt_keypoint, dtype=torch.float32, device=self.device) # 强制转成 tensor，防止是 list
             # 加入扩散噪声
-            d_keypoint, d_noise, d_t = self.prepare_diffusion_concat(keypoint)  # 你需要定义为支持 [N, K, 2]
+            d_keypoint, d_noise, d_t = self.prepare_diffusion_concat(gt_keypoint)  # 你需要定义为支持 [N, K, 2]
             diffused_keypoints.append(d_keypoint)  # [N, K, 2]
             noises.append(d_noise)                 # [N, K, 2]
             ts.append(d_t)                         # [N]
@@ -434,16 +429,16 @@ class csidiffusion(nn.Module):
 
         t = torch.randint(0, self.num_timesteps, (1,), device=self.device).long()  # 单个扩散时间步
         N, K, _ = gt_keypoints.shape
-        noise = torch.randn(self.num_proposals, K, 2, device=self.device)  # 采样噪声
+        noise = torch.randn(self.num_proposals, K, self.num_dimension, device=self.device)  # 采样噪声
 
         # 如果没有GT关键点，生成一个默认关键点组，全部0.5中间点
         if N == 0:
-            gt_keypoints = torch.full((1, K, 2), 0.5, dtype=torch.float, device=self.device)
+            gt_keypoints = torch.full((1, K, self.num_dimension), 0.5, dtype=torch.float, device=self.device)
             N = 1
         # 处理GT数量与proposal数量的关系
         if N < self.num_proposals:
             # 用均值附近的随机噪声填充缺少的proposal
-            placeholder = torch.randn(self.num_proposals - N, K, 2, device=self.device) / 6. + 0.5
+            placeholder = torch.randn(self.num_proposals - N, K, self.num_dimension, device=self.device) / 6. + 0.5
             # clamp到合理范围避免负值
             placeholder = placeholder.clamp(0., 1.)
             x_start = torch.cat([gt_keypoints, placeholder], dim=0)  # [num_proposals, K, 2]
