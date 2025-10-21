@@ -142,16 +142,22 @@ class SetCriterion(nn.Module):
         src_idx = torch.cat([src for (src, _) in indices])
         return batch_idx, src_idx
 
-    def forward(self, outputs, targets):
+    def forward(self, outputs, targets, eva=False):
         indices = self.matcher(outputs, targets)
         losses = {}
+        pck_list = {}
         losses.update(self.loss_labels(outputs, targets, indices))
         losses.update(self.loss_keypoints(outputs, targets, indices))
+        if eva:
+            idx = self._get_src_permutation_idx(indices)
+            nsrc_kpts = outputs['pred_keypoints'][idx]           # [num_match, K, 2]
+            ntarget_kpts = torch.cat([t['keypoints'][J] for t, (_, J) in zip(targets, indices)], dim=0)
+            pck_list=calculate_pck_range(nsrc_kpts,ntarget_kpts) 
 
         # 组合总损失
         total_loss = sum(losses[k] * self.weight_dict[k] for k in losses.keys())
         losses['total_loss'] = total_loss
-        return losses
+        return losses, pck_list
 
 '''计算mIOU'''
 def calculate_batch_iou(pred_boxes, true_boxes):
@@ -222,8 +228,8 @@ def calculate_pck_range(pre_keypoint, true_keypoint, thresholds=None, refer_kpts
     if thresholds is None:
         thresholds = np.arange(0.1, 1.0, 0.1)
 
-    pre_keypoint = pre_keypoint.detach().cpu().numpy().reshape(-1, 3, 17, 2)
-    true_keypoint = true_keypoint.detach().cpu().numpy().reshape(-1, 3, 17, 2)
+    pre_keypoint = pre_keypoint.detach().cpu().numpy().reshape(-1, 17, 2)
+    true_keypoint = true_keypoint.detach().cpu().numpy().reshape(-1, 17, 2)
 
     B = pre_keypoint.shape[0]
     pck_list = []
@@ -233,24 +239,24 @@ def calculate_pck_range(pre_keypoint, true_keypoint, thresholds=None, refer_kpts
         total_visible = 0
 
         for b in range(B):  # 每个样本
-            for p in range(3):  # 每个人
-                gt = true_keypoint[b, p]
-                pred = pre_keypoint[b, p]
+            
+            gt = true_keypoint[b]
+            pred = pre_keypoint[b]
 
-                # 计算参考尺度
-                if np.all(gt[refer_kpts[0]] != 0) and np.all(gt[refer_kpts[1]] != 0):
-                    scale = np.linalg.norm(gt[refer_kpts[0]] - gt[refer_kpts[1]])
-                    if scale == 0:
-                        continue
-                else:
+            # 计算参考尺度
+            if np.all(gt[refer_kpts[0]] != 0) and np.all(gt[refer_kpts[1]] != 0):
+                scale = np.linalg.norm(gt[refer_kpts[0]] - gt[refer_kpts[1]])
+                if scale == 0:
                     continue
+            else:
+                continue
 
-                for j in range(17):
-                    if np.all(gt[j] != 0):
-                        dist = np.linalg.norm(pred[j] - gt[j])
-                        if dist / scale <= thresh:
-                            total_correct += 1
-                        total_visible += 1
+            for j in range(17):
+                if np.all(gt[j] != 0):
+                    dist = np.linalg.norm(pred[j] - gt[j])
+                    if dist / scale <= thresh:
+                        total_correct += 1
+                    total_visible += 1
 
         pck = total_correct / total_visible if total_visible > 0 else 0.0
         pck_list.append(pck)
@@ -260,7 +266,7 @@ def calculate_pck_range(pre_keypoint, true_keypoint, thresholds=None, refer_kpts
 '''训练代码'''
 def train(epoch,model,train_dataloader,criterion,optimizer,visualizer):
     model.train()
-
+    eva_flag = False
 
     start_time = time.time()
     for i, data in enumerate(train_dataloader):
@@ -300,8 +306,11 @@ def train(epoch,model,train_dataloader,criterion,optimizer,visualizer):
         
         matcher = HungarianMatcher(cost_class=1, cost_keypoints=5)
         new_criterion = SetCriterion(num_classes=1, matcher=matcher)
-        loss_dict = new_criterion(outputs, targets)
         
+        if (i + 1) % 50 == 0 or (i + 1) == len(train_dataloader): eva_flag = True
+        
+        loss_dict, n_pck_list = new_criterion(outputs, targets, eva=eva_flag)
+        eva_flag = False
         
         #loss =  0.1 * box_loss + keypoint_loss
         #loss =  keypoint_loss 
@@ -315,8 +324,9 @@ def train(epoch,model,train_dataloader,criterion,optimizer,visualizer):
         optimizer.zero_grad()
         #loss.backward()
         loss_dict['total_loss'].backward()
-        
         optimizer.step()
+        
+        
          # 每 50 步打印一次
         if (i + 1) % 50 == 0 or (i + 1) == len(train_dataloader):
             print(f"Epoch [{epoch+1}/{opt.max_epoch}], Step [{i+1}/{len(train_dataloader)}], "
@@ -335,6 +345,14 @@ def train(epoch,model,train_dataloader,criterion,optimizer,visualizer):
                 if j ==4:
                    visualizer.plot(f'train_PCK@{(j+1)/10:.1f}', pck)
                 print(f"  PCK@{(j+1)/10:.1f}: {pck:.4f}")
+                
+            print("N_PCK Results:")
+
+            for j, pck in enumerate(n_pck_list):
+                if j ==4:
+                   visualizer.plot(f'train_PCK@{(j+1)/10:.1f}', pck)
+                print(f"  PCK@{(j+1)/10:.1f}: {pck:.4f}")
+            
                 
     #完成时间
     end_time = time.time()
