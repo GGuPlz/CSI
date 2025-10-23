@@ -255,15 +255,7 @@ class csidiffusion(nn.Module):
                              num_outs=4
                             )
         self.combine = FeatureMerger()  #(32 22,256)
-        self.head = DynamicHead()
-        self.decode = nn.Sequential(
-             nn.Linear(256 * 22, 512),
-             nn.ReLU(),
-             nn.Linear(512, 256),
-             nn.ReLU(),
-             nn.Linear(256, 102)
-        ) 
-        
+
         self.num_proposals = 3
         self.num_keypoints = 17
         self.num_dimension = 2
@@ -319,8 +311,14 @@ class csidiffusion(nn.Module):
             pred_keypoints, pred_classes = self.code(x_keypoints.view(bs, -1), t, combined)
             pred_keypoints = pred_keypoints.view(-1, self.num_proposals, self.num_keypoints, self.num_dimension)
             pred_classes = pred_classes.view(-1, self.num_proposals, 2)
-            return pred_keypoints, pred_classes
-        
+            
+            outputs = {
+                'pred_logits': pred_classes,
+                'pred_keypoints': pred_keypoints
+            }
+
+            return outputs
+
     def predict_noise_from_start(self, x_t, t, x0):
         return (
                 (extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - x0) /
@@ -337,6 +335,7 @@ class csidiffusion(nn.Module):
         #outputs_kpts = self.head(backbone_feats, x_kpts, t, None)
         outputs_kpts, outputs_classes = self.code(x_kpts.view(x_kpts.shape[0], -1), t, backbone_feats)
         outputs_kpts = outputs_kpts.view(-1, self.num_proposals, self.num_keypoints, self.num_dimension)
+        outputs_classes = outputs_classes.view(-1, self.num_proposals, 2)
         # x_start 是去噪后的预测结果（关键点）
         x_start = outputs_kpts  # (B, N, K*2)，表示 K 个关键点的 (x, y)
         x_start= x_kpts / self.hw
@@ -400,7 +399,12 @@ class csidiffusion(nn.Module):
             kps = all_kps.mean(dim=0)  # [B, N, K, 2]
         else:
             kps = output_kpts  # [B, N, K, 2]
-        return kps, output_classes
+            
+        outputs = {
+                'pred_logits': output_classes,
+                'pred_keypoints': kps
+            }
+        return outputs
        
         
     def prepare_targets(self, targets):
