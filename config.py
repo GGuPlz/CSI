@@ -1,16 +1,14 @@
 import warnings
 
 
-class DefaultConfig(object):
-    ##path for z509 linux
-    # data = '/media/public/z509/g23/wyt/YOLOV11/1data_create/dataset/main_small'
-    # train_data = '/media/public/z509/g23/wyt/YOLOV11/1data_create/dataset/main_small/train'
-    # test_data = '/media/public/z509/g23/wyt/YOLOV11/1data_create/dataset/main_small/test'
+class DefaultConfig(object):    
+    #system_path = '/media/public/z509/g24/gyt/CSI'
+    system_path = 'C:/Users/gyt/OneDrive/Desktop/code/CSI'
     
     ##path for gyt pc windows
-    data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI/CSI_data'
-    train_data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI/CSI_data/train'
-    test_data = 'C:/Users/gyt/OneDrive/Desktop/code/CSI/CSI_data/test'
+    data = system_path + '/CSI_data'
+    train_data = system_path + '/CSI_data/train'
+    test_data = system_path + '/CSI_data/test'
 
     #load_model_path='/media/public/z509/g23/wyt/YOLOV11/2WIFI-2D/run/20250426/main_small/结果/best.pth'
     #load_model_path='/media/public/z509/g24/gyt/CSI/run/0928/best.pth'
@@ -18,14 +16,14 @@ class DefaultConfig(object):
     
     batch_size = 32#指定每个批次的样本数量，即一次性送入模型进行训练或推理的样本数量
     use_gpu = True    #指定是否使用 GPU 进行计算
-    num_workers = 0   #指定数据加载过程中使用的线程数，即同时加载数据的线程数量
+    num_workers = 0  #指定数据加载过程中使用的线程数，即同时加载数据的线程数量
     use_MSE = False
     print_freq = 20   #指定训练过程中每隔多少个批次打印一次训练信息
 
     debug_file = 'tmp/debug'    #没用到
-    save_path = 'C:/Users/gyt/OneDrive/Desktop/code/CSI/run/1004/'  #模型保存路径
-    result_file = 'C:/Users/gyt/OneDrive/Desktop/code/CSI/run/1004/main_small/结果/results.csv' 
-    resultvideo_file = 'C:/Users/gyt/OneDrive/Desktop/code/CSI/run/1004/main_small/结果'
+    save_path = system_path + '/run/1004'  #模型保存路径
+    result_file = system_path + '/run/1004/results.csv' 
+    resultvideo_file = system_path + '/run/1004'
 
     max_epoch = 250   #训练的最大轮数
     # lr = 0.00002      #学习率，即每次更新模型参数的步长大小

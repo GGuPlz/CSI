@@ -25,9 +25,10 @@ from scipy.optimize import linear_sum_assignment
 
 
 from config import opt
-from dataloader import get_dataloader
+from dataloader import get_dataloader, new_get_dataloader
 from CSI_diffusion.detector import csidiffusion
 
+device =  torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 '''可视化界面'''
 class Visualizer(object):
@@ -101,7 +102,7 @@ class SetCriterion(nn.Module):
         self.eos_coef = eos_coef
 
         # 背景类别权重
-        empty_weight = torch.ones(self.num_classes + 1).cuda()
+        empty_weight = torch.ones(self.num_classes + 1).to(device)
         empty_weight[-1] = self.eos_coef
         self.register_buffer('empty_weight', empty_weight)
 
@@ -209,15 +210,15 @@ def train(epoch,model,train_dataloader,criterion,optimizer,visualizer):
     for i, data in enumerate(train_dataloader):
         
         #加载数据
-        csi_abs   = data['csi_abs'].float().cuda(non_blocking=True)   #torch.Size([32, 5, 3, 3, 30])
-        csi_phase = data['csi_phase'].float().cuda(non_blocking=True) #torch.Size([32, 5, 3, 3, 30])
+        csi_abs   = data['csi_abs'].float().to(device)  #torch.Size([32, 5, 3, 3, 30])
+        csi_phase = data['csi_phase'].float().to(device) #torch.Size([32, 5, 3, 3, 30])
         #得到输入网络里的csi
         # B, T1, C1, C2, T2 = csi_abs.shape  # B=32, T1=5, C1=3, C2=3, T2=30
         targets = []
-        for idx in range(len(data['n_keypoint'])):
+        for idx in range(len(data['keypoint'])):
             targets.append({
-                'labels': data['label'][idx].cuda(non_blocking=True),
-                'keypoints': data['n_keypoint'][idx].cuda(non_blocking=True)
+                'labels': data['label'][idx].to(device),
+                'keypoints': data['keypoint'][idx].to(device)
             })
         
         csi_abs = csi_abs.permute(0, 2, 1, 3, 4).contiguous().view(csi_abs.shape[0], 3, 15, 30)
@@ -281,8 +282,8 @@ def test(epoch,model, test_dataloader, criterion,visualizer,best_PCK,save_path):
     with torch.no_grad():
         for i, data in enumerate(test_dataloader):
             # 加载数据
-            csi_abs   = data['csi_abs'].float().cuda(non_blocking=True)
-            csi_phase = data['csi_phase'].float().cuda(non_blocking=True)
+            csi_abs   = data['csi_abs'].float().to(device)
+            csi_phase = data['csi_phase'].float().to(device)
             # CSI 预处理
             # B, T1, C1, C2, T2 = csi_abs.shape  # B=32, T1=5, C1=3, C2=3, T2=30
             
@@ -293,8 +294,8 @@ def test(epoch,model, test_dataloader, criterion,visualizer,best_PCK,save_path):
             targets = []
             for idx in range(len(data['keypoint'])):
                 targets.append({
-                    'labels': data['label'][idx].cuda(non_blocking=True),
-                    'keypoints': data['n_keypoint'][idx].cuda(non_blocking=True)
+                    'labels': data['label'][idx].to(device),
+                    'keypoints': data['keypoint'][idx].to(device)
                 })
             
 
@@ -377,21 +378,26 @@ def main(**kwargs):
     # model = nn.DataParallel(model) 
     if opt.load_model_path:  
         model.load_state_dict(torch.load(opt.load_model_path))
-    if opt.use_gpu:
-        model.cuda()
+    model.to(device)
 
     #setp2 加载训练和测试数据集
-    train_dataloader = get_dataloader(
-       join(opt.train_data,'csidata'),'csi_abs', 'csi_phase',
-       join(opt.train_data,'keybox'),'keypoints', 'boxes',
-       batch_size= opt.batch_size ,shuffle=True,num_workers=opt.num_workers
+    # train_dataloader = get_dataloader(
+    #    join(opt.train_data,'csidata'),'csi_abs', 'csi_phase',
+    #    join(opt.train_data,'keybox'),'keypoints', 'boxes',
+    #    batch_size= opt.batch_size ,shuffle=True,num_workers=opt.num_workers
+    # ) 
+    # test_dataloader = get_dataloader(
+    #    join(opt.test_data,'csidata'),'csi_abs', 'csi_phase',
+    #    join(opt.test_data,'keybox'),'keypoints', 'boxes',
+    #    batch_size= opt.batch_size  ,shuffle=True,num_workers=opt.num_workers
+    # ) 
+    
+    train_dataloader = new_get_dataloader(
+       opt.train_data, batch_size=opt.batch_size, shuffle=True, num_workers=opt.num_workers
     ) 
-    test_dataloader = get_dataloader(
-       join(opt.test_data,'csidata'),'csi_abs', 'csi_phase',
-       join(opt.test_data,'keybox'),'keypoints', 'boxes',
-       batch_size= opt.batch_size  ,shuffle=True,num_workers=opt.num_workers
+    test_dataloader = new_get_dataloader(
+       opt.test_data, batch_size=opt.batch_size, shuffle=True, num_workers=opt.num_workers
     ) 
-
     #setp3加载损失函数和优化器
     matcher = HungarianMatcher(cost_class=1, cost_keypoints=5)
     criterion = SetCriterion(num_classes=1, matcher=matcher)
@@ -407,7 +413,7 @@ def main(**kwargs):
     for epoch in range(opt.max_epoch):
         save_path = time.strftime(opt.save_path) + f'best.pth'
         train(epoch,model,train_dataloader,criterion,optimizer,visualizer)
-        best_PCK =test(epoch,model,train_dataloader,criterion,visualizer,best_PCK,save_path)
+        best_PCK =test(epoch,model,test_dataloader,criterion,visualizer,best_PCK,save_path)
         scheduler.step()
     
 if __name__ == "__main__":

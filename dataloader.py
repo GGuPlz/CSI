@@ -3,6 +3,7 @@ import torch
 import numpy as np
 import os
 import scipy.io as sio
+from scipy.io import loadmat
 import time
 import sys
 
@@ -25,19 +26,52 @@ class CSIDataset(Dataset):
         return {
             'csi_abs': self.csi_abs_datas[idx],
             'csi_phase': self.csi_phase_datas[idx],
-            'keypoint': self.keypoints_labels[idx],
-            'n_keypoint': keypoint,
-            'box': self.box_labels[idx],
+            'keypoint': keypoint,
             'label': label
         }
 
+class N_CSIDataset(Dataset):
+    def __init__(self, root_path):
+        self.sample = []
+        list_file = sorted([os.path.join(root_path, f) for f in os.listdir(root_path) if f.endswith('.txt')])
+        
+        with open(list_file[0], 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                data_path = os.path.join(root_path, 'csidata', line+'.mat')
+                label_path = os.path.join(root_path, 'keybox', line+'.mat')
+                self.sample.append((data_path, label_path))
+
+    def __len__(self):
+        return len(self.sample)
+
+    def __getitem__(self, idx):
+        data_path, label_path = self.sample[idx]
+        
+        data = loadmat(data_path)
+        label = loadmat(label_path)
+        
+        csi_abs = torch.tensor(data['csi_abs'])
+        csi_phase = torch.tensor(data['csi_phase'])
+        keypoint = torch.tensor(label['keypoints']).view(-1, 17, 2)
+        vaild_mask = keypoint.abs().sum(dim=(1, 2)) > 0
+        keypoint = keypoint[vaild_mask]
+        label = torch.zeros(keypoint.shape[0], dtype=torch.long)
+        
+        return {
+            'csi_abs': csi_abs,
+            'csi_phase': csi_phase,
+            'keypoint': keypoint,
+            'label': label
+        }
+        
 def collate_fn(batch):
     batch_out = {
         'csi_abs': [],
         'csi_phase': [],
         'keypoint': [],
-        'n_keypoint': [],
-        'box': [],
         'label': []
     }
 
@@ -45,17 +79,12 @@ def collate_fn(batch):
         batch_out['csi_abs'].append(sample['csi_abs'])
         batch_out['csi_phase'].append(sample['csi_phase'])
         batch_out['keypoint'].append(sample['keypoint'])
-        batch_out['n_keypoint'].append(sample['n_keypoint'])
-        batch_out['box'].append(sample['box'])
         batch_out['label'].append(sample['label'])
 
     # 如果 csi_abs / csi_phase 是固定 shape，可以直接 stack
     batch_out['csi_abs'] = torch.stack(batch_out['csi_abs'])
     batch_out['csi_phase'] = torch.stack(batch_out['csi_phase'])
-    batch_out['box'] = torch.stack(batch_out['box'])
-    batch_out['keypoint'] = torch.stack(batch_out['keypoint'])
     # keypoint 与 box 不 stack，保持 list（因人数 n 不一定相同）
-
     return batch_out
 
 def get_dataloader(csidata_path, data_name1, data_name2, heatmap_path, label_name1, label_name2, batch_size, shuffle, num_workers):
@@ -106,6 +135,25 @@ def get_dataloader(csidata_path, data_name1, data_name2, heatmap_path, label_nam
     print('csi_phase_datas的形状为:', csi_phase_datas.shape)
     print('keypoints_labels的形状为:', keypoints_labels.shape)
     print('box_labels的形状为:', box_labels.shape)
+    print("============================================")
+
+    return dataloader
+
+
+def new_get_dataloader(root_path, batch_size, shuffle, num_workers):
+    start_time = time.time()
+    
+
+    dataset = N_CSIDataset(root_path=root_path)
+    dataloader = DataLoader(dataset=dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers,pin_memory=True, collate_fn=collate_fn)
+
+    end_time = time.time()
+    load_duration = end_time - start_time
+    print('数据集的大小为：', len(dataset))
+    print('csi_abs_datas的形状为:', dataset[0]['csi_abs'].shape)
+    print('csi_phase_datas的形状为:', dataset[0]['csi_phase'].shape)
+    print('keypoints_labels的形状为:', dataset[0]['keypoint'].shape)
+    print('耗时为: {:.2f} 秒'.format(load_duration))
     print("============================================")
 
     return dataloader
