@@ -55,35 +55,37 @@ class N_CSIDataset(Dataset):
         
         csi_abs = torch.tensor(data['csi_abs'])
         csi_phase = torch.tensor(data['csi_phase'])
+        # B, T1, C1, C2, T2 = csi_abs.shape  # B=32, T1=5, C1=3, C2=3, T2=30
+        csi_abs = csi_abs.permute(1, 0, 2, 3).contiguous().view(3, 15, 30)
+        csi_phase = csi_phase.permute(1, 0, 2, 3).contiguous().view(3, 15, 30)
+        csi = torch.cat([csi_abs, csi_phase], dim=1)
+
         keypoint = torch.tensor(label['keypoints']).view(-1, 17, 2)
         vaild_mask = keypoint.abs().sum(dim=(1, 2)) > 0
         keypoint = keypoint[vaild_mask]
         label = torch.zeros(keypoint.shape[0], dtype=torch.long)
         
         return {
-            'csi_abs': csi_abs,
-            'csi_phase': csi_phase,
+            'csi': csi,
             'keypoint': keypoint,
             'label': label
         }
         
 def collate_fn(batch):
     batch_out = {
-        'csi_abs': [],
-        'csi_phase': [],
+        'csi': [],
         'keypoint': [],
         'label': []
     }
 
     for sample in batch:
-        batch_out['csi_abs'].append(sample['csi_abs'])
-        batch_out['csi_phase'].append(sample['csi_phase'])
+        batch_out['csi'].append(sample['csi'])
         batch_out['keypoint'].append(sample['keypoint'])
         batch_out['label'].append(sample['label'])
 
-    # 如果 csi_abs / csi_phase 是固定 shape，可以直接 stack
-    batch_out['csi_abs'] = torch.stack(batch_out['csi_abs'])
-    batch_out['csi_phase'] = torch.stack(batch_out['csi_phase'])
+    # 如果 csi 是固定 shape，可以直接 stack
+    batch_out['csi'] = torch.stack(batch_out['csi'])
+
     # keypoint 与 box 不 stack，保持 list（因人数 n 不一定相同）
     return batch_out
 
@@ -150,8 +152,7 @@ def new_get_dataloader(root_path, batch_size, shuffle, num_workers):
     end_time = time.time()
     load_duration = end_time - start_time
     print('数据集的大小为：', len(dataset))
-    print('csi_abs_datas的形状为:', dataset[0]['csi_abs'].shape)
-    print('csi_phase_datas的形状为:', dataset[0]['csi_phase'].shape)
+    print('csi_datas的形状为:', dataset[0]['csi'].shape)
     print('keypoints_labels的形状为:', dataset[0]['keypoint'].shape)
     print('耗时为: {:.2f} 秒'.format(load_duration))
     print("============================================")

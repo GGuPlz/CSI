@@ -208,12 +208,8 @@ def train(epoch,model,train_dataloader,criterion,optimizer,visualizer):
 
     start_time = time.time()
     for i, data in enumerate(train_dataloader):
-        
         #加载数据
-        csi_abs   = data['csi_abs'].float().to(device)  #torch.Size([32, 5, 3, 3, 30])
-        csi_phase = data['csi_phase'].float().to(device) #torch.Size([32, 5, 3, 3, 30])
-        #得到输入网络里的csi
-        # B, T1, C1, C2, T2 = csi_abs.shape  # B=32, T1=5, C1=3, C2=3, T2=30
+        csi = data['csi'].float().to(device)  #torch.Size([32, 3, 30, 30])
         targets = []
         for idx in range(len(data['keypoint'])):
             targets.append({
@@ -221,22 +217,16 @@ def train(epoch,model,train_dataloader,criterion,optimizer,visualizer):
                 'keypoints': data['keypoint'][idx].to(device)
             })
         
-        csi_abs = csi_abs.permute(0, 2, 1, 3, 4).contiguous().view(csi_abs.shape[0], 3, 15, 30)
-        csi_phase = csi_phase.permute(0, 2, 1, 3, 4).contiguous().view(csi_abs.shape[0], 3, 15, 30)
-        csi = torch.cat([csi_abs, csi_phase], dim=2)  #torch.Size([32, 3, 30, 30])
-
         outputs = model(csi, targets)
         
-        
         if (i + 1) % 50 == 0 or (i + 1) == len(train_dataloader): eva_flag = True
-        
+
         loss_dict, pck_list = criterion(outputs, targets, eva=eva_flag)
         eva_flag = False
 
         optimizer.zero_grad()
         loss_dict['total_loss'].backward()
         optimizer.step()
-        
         
          # 每 50 步打印一次
         if (i + 1) % 50 == 0 or (i + 1) == len(train_dataloader):
