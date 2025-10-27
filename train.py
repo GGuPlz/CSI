@@ -66,7 +66,7 @@ class HungarianMatcher(nn.Module):
             pred_keypoints: [B, num_queries, K, 2]
         targets:
             list of dict, each has:
-                'labels': [num_gt]
+                'cls_label': [num_gt]
                 'keypoints': [num_gt, K, 2]
         """
         bs, num_queries = outputs['pred_logits'].shape[:2]
@@ -75,7 +75,7 @@ class HungarianMatcher(nn.Module):
 
         indices = []
         for b in range(bs):
-            tgt_ids = targets[b]['labels']              # [num_gt]
+            tgt_ids = targets[b]['cls_label']              # [num_gt]
             tgt_kpts = targets[b]['keypoints']          # [num_gt, K, 2]
 
             # 分类代价（负 log 概率）
@@ -111,7 +111,7 @@ class SetCriterion(nn.Module):
         src_logits = outputs['pred_logits']  # [B, Q, C+1]
 
         idx = self._get_src_permutation_idx(indices)
-        target_classes_o = torch.cat([t['labels'][J] for t, (_, J) in zip(targets, indices)])
+        target_classes_o = torch.cat([t['cls_label'][J] for t, (_, J) in zip(targets, indices)])
         target_classes = torch.full(src_logits.shape[:2], self.num_classes,
                                     dtype=torch.int64, device=src_logits.device)
         target_classes[idx] = target_classes_o
@@ -213,7 +213,7 @@ def train(epoch,model,train_dataloader,criterion,optimizer,visualizer):
         targets = []
         for idx in range(len(data['keypoint'])):
             targets.append({
-                'labels': data['label'][idx].to(device),
+                'cls_label': data['cls_label'][idx].to(device),
                 'keypoints': data['keypoint'][idx].to(device)
             })
         
@@ -284,7 +284,7 @@ def test(epoch,model, test_dataloader, criterion,visualizer,best_PCK,save_path):
             targets = []
             for idx in range(len(data['keypoint'])):
                 targets.append({
-                    'labels': data['label'][idx].to(device),
+                    'cls_label': data['cls_label'][idx].to(device),
                     'keypoints': data['keypoint'][idx].to(device)
                 })
             

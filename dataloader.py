@@ -6,6 +6,7 @@ import scipy.io as sio
 from scipy.io import loadmat
 import time
 import sys
+import h5py
 
 class CSIDataset(Dataset):
     def __init__(self, csi_abs_datas, csi_phase_datas, keypoints_labels, box_labels):
@@ -63,25 +64,63 @@ class N_CSIDataset(Dataset):
         keypoint = torch.tensor(label['keypoints']).view(-1, 17, 2)
         vaild_mask = keypoint.abs().sum(dim=(1, 2)) > 0
         keypoint = keypoint[vaild_mask]
-        label = torch.zeros(keypoint.shape[0], dtype=torch.long)
+        cls_label = torch.zeros(keypoint.shape[0], dtype=torch.long)
         
         return {
             'csi': csi,
             'keypoint': keypoint,
-            'label': label
+            'cls_label': cls_label
+        }
+
+class P_CSIDataset(Dataset):
+    def __init__(self, root_path):
+        self.sample = []
+        list_file = sorted([os.path.join(root_path, f) for f in os.listdir(root_path) if f.endswith('.txt')])
+        
+        with open(list_file[0], 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                data_path = os.path.join(root_path, 'csi', line+'.mat')
+                label_path = os.path.join(root_path, 'keypoint', line+'.npy')
+                self.sample.append((data_path, label_path))
+
+    def __len__(self):
+        return len(self.sample)
+
+    def __getitem__(self, idx):
+        data_path, label_path = self.sample[idx]
+        
+        with h5py.File(data_path, 'r') as f:
+            data = f['csi_out'][:]
+        label = np.load(label_path)
+        data = data['real'] + 1j * data['imag']
+        data = torch.from_numpy(data).float()
+        data = data.permute(2, 3, 0, 1)
+        csi = data.contiguous().view(3, 60, 60)
+        keypoint = torch.from_numpy(label).view(-1, 14, 3)
+        vaild_mask = keypoint.abs().sum(dim=(1, 2)) > 0
+        keypoint = keypoint[vaild_mask]
+        cls_label = torch.zeros(keypoint.shape[0], dtype=torch.long)
+        
+        return {
+            'csi': csi,
+            'keypoint': keypoint,
+            'cls_label': cls_label
         }
         
 def collate_fn(batch):
     batch_out = {
         'csi': [],
         'keypoint': [],
-        'label': []
+        'cls_label': []
     }
 
     for sample in batch:
         batch_out['csi'].append(sample['csi'])
         batch_out['keypoint'].append(sample['keypoint'])
-        batch_out['label'].append(sample['label'])
+        batch_out['cls_label'].append(sample['cls_label'])
 
     # 如果 csi 是固定 shape，可以直接 stack
     batch_out['csi'] = torch.stack(batch_out['csi'])
