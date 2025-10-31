@@ -7,8 +7,9 @@ class DefaultConfig(object):
     
     ##path for gyt pc windows
     data = system_path + '/CSI_data'
-    train_data = system_path + '/CSI_data/train'
-    test_data = system_path + '/CSI_data/test'
+    #data = system_path + '/wifipose'
+    train_data = data + '/train'
+    test_data = data + '/test'
 
     #load_model_path='/media/public/z509/g23/wyt/YOLOV11/2WIFI-2D/run/20250426/main_small/结果/best.pth'
     #load_model_path='/media/public/z509/g24/gyt/CSI/run/0928/best.pth'
@@ -22,7 +23,7 @@ class DefaultConfig(object):
 
     debug_file = 'tmp/debug'    #没用到
     save_path = system_path + '/run/1004'  #模型保存路径
-    result_file = system_path + '/run/1004/results.csv' 
+    result_file = save_path + '/results.csv' 
     resultvideo_file = system_path + '/run/1004'
 
     max_epoch = 250   #训练的最大轮数

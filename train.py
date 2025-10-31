@@ -252,7 +252,7 @@ def train(epoch,model,train_dataloader,criterion,optimizer,visualizer):
     elapsed_time = end_time - start_time
     print(f"Epoch [{epoch+1}/{opt.max_epoch}] completed in {elapsed_time:.2f} seconds.")
     #保存每轮的模型
-    name = opt.save_path + 'last.pth'
+    name = opt.save_path + '/last.pth'
     torch.save(model.state_dict(), name)
 
 '''测试代码'''
@@ -272,14 +272,9 @@ def test(epoch,model, test_dataloader, criterion,visualizer,best_PCK,save_path):
     with torch.no_grad():
         for i, data in enumerate(test_dataloader):
             # 加载数据
-            csi_abs   = data['csi_abs'].float().to(device)
-            csi_phase = data['csi_phase'].float().to(device)
             # CSI 预处理
             # B, T1, C1, C2, T2 = csi_abs.shape  # B=32, T1=5, C1=3, C2=3, T2=30
-            
-            csi_abs = csi_abs.permute(0, 2, 1, 3, 4).contiguous().view(csi_abs.shape[0], 3, 15, 30)
-            csi_phase = csi_phase.permute(0, 2, 1, 3, 4).contiguous().view(csi_abs.shape[0], 3, 15, 30)
-            csi = torch.cat([csi_abs, csi_phase], dim=2)  # [B, 3, 30, 30]
+            csi = data['csi'].float().to(device)  # [B, 3, 30, 30]
             
             targets = []
             for idx in range(len(data['keypoint'])):
@@ -401,7 +396,7 @@ def main(**kwargs):
     #训练模型
     best_PCK = 0
     for epoch in range(opt.max_epoch):
-        save_path = time.strftime(opt.save_path) + f'best.pth'
+        save_path = time.strftime(opt.save_path) + f'/best.pth'
         train(epoch,model,train_dataloader,criterion,optimizer,visualizer)
         best_PCK =test(epoch,model,test_dataloader,criterion,visualizer,best_PCK,save_path)
         scheduler.step()

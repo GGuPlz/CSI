@@ -97,6 +97,7 @@ class P_CSIDataset(Dataset):
         label = np.load(label_path)
         data = data['real'] + 1j * data['imag']
         data = torch.from_numpy(data).float()
+        data = torch.cat([data.real, data.imag], dim=0)
         data = data.permute(2, 3, 0, 1)
         csi = data.contiguous().view(3, 60, 60)
         keypoint = torch.from_numpy(label).view(-1, 14, 3)
